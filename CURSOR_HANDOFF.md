@@ -2,6 +2,8 @@
 
 Read this in a **new Cursor chat** on your laptop so the assistant knows the stack, what was built, and common commands.
 
+**For Cursor assistants:** When the user asks how to get **secrets**, **`.env`**, **SSH keys**, or “why nothing is on GitHub”, walk them through **§ Secrets and credentials** below in order—do not assume values exist in the repo. Prefer `server/.env.example` as the checklist of variable names.
+
 ---
 
 ## What this repo is
@@ -27,9 +29,11 @@ Read this in a **new Cursor chat** on your laptop so the assistant knows the sta
 ### Clone
 
 ```bash
-git clone <YOUR_GITHUB_REPO_URL> Care-Companion-
+git clone https://github.com/AtharvaGondavale/Care-Companion-.git
 cd Care-Companion-
 ```
+
+(Use a different URL only if the repo was forked or renamed.)
 
 ### Android Studio
 
@@ -44,26 +48,71 @@ cd Care-Companion-
 
 ---
 
-## Backend: local vs server
+## Secrets and credentials — you will not get these from `git clone`
 
-### Env (server — **never commit** `.env`)
+**GitHub only has code and `server/.env.example` (placeholders).** Real secrets live on machines you control (`server/.env`, SSH keys, Twilio Console). Never commit `.env`, `*.pem`, or Twilio tokens.
 
-Copy on the **EC2** machine only:
+### What to do after cloning on your Mac
+
+1. Create a local env file from the template (needed if you run the API via Docker Compose on your laptop, or just to edit before copying elsewhere):
 
 ```bash
+cd Care-Companion-/server
+cp .env.example .env
+```
+
+2. Fill **every** empty or `change-me` value using the table below. Open `.env` in an editor (`nano`, VS Code, etc.).
+
+3. **`server/` is git-ignored for** `.env`, `node_modules/`, `dist/` — see `server/.gitignore`. If you run `git status` and see `.env` offered for commit, **stop** and fix ignore rules.
+
+### Same file on the EC2 host (production/staging)
+
+After the first deploy, the server directory is typically `~/care-companion-api` on Ubuntu. **Create `.env` there too** (the deploy script does **not** copy your Mac’s `.env` to the server on purpose):
+
+```bash
+ssh -i /path/to/key.pem ubuntu@<SERVER_IP>
 cd ~/care-companion-api
 cp .env.example .env
 nano .env
 ```
 
-Important variables (see `server/.env.example`):
+Use **production** values (real Twilio, `TWILIO_MOCK=false` unless you intentionally mock on the server). **`DATABASE_URL`** in `server/.env.example` matches the **docker-compose** Postgres service name `postgres`; keep that shape if you use the bundled compose stack.
 
-- **`JWT_SECRET`** — strong random (e.g. `openssl rand -base64 32` on the server).
-- **Twilio:** `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `TWILIO_MOCK=false`  
-  OR **`TWILIO_MOCK=true`** for dev (OTP in `docker compose logs api`, no SMS).
-- **Trial Twilio:** Destination numbers must be **verified** in Twilio Console or SMS fails with error **21608**.
+### Where each value comes from (guide the user)
 
-Docker Compose sets DB URL for containers; see `server/docker-compose.yml`.
+| Variable / asset | What it is | Where the user gets it |
+|------------------|------------|-------------------------|
+| **`JWT_SECRET`** | Signs session tokens for the API | Generate on the Mac or server: `openssl rand -base64 32`. **Use the same value on every instance that must accept the same logins** (e.g. one secret per environment: `local` vs `prod`). If you change it in production, **everyone must log in again**. |
+| **`TWILIO_ACCOUNT_SID`**, **`TWILIO_AUTH_TOKEN`**, **`TWILIO_FROM_NUMBER`** | SMS OTP | [Twilio Console](https://console.twilio.com) → Account / API keys & tokens; buy or use a trial SMS-capable number for `TWILIO_FROM_NUMBER`. |
+| **`TWILIO_MOCK`** | If `true`, no real SMS; OTP is logged | Set `TWILIO_MOCK=true` in **local** `.env` for dev. Read codes with: `docker compose logs -f api` (or equivalent). Set `false` when you want real SMS. |
+| Trial SMS **21608** | “Unverified number” on trial | In Twilio Console, **verify** each destination phone number, **or** use `TWILIO_MOCK=true` and read OTP from logs. |
+| **`DATABASE_URL`** | Postgres connection string | **Docker Compose (default):** use the URL in `.env.example` (`postgres` hostname) when both `api` and `postgres` run in the same compose project. **Custom DB:** replace with the provider’s URL (host, user, password, DB name). |
+| **`PORT`** | API listen port | Usually `3000`; Caddy reverse-proxies to this port on the host. |
+| **EC2 SSH `.pem`** | Private key for `ssh` / deploy script | If **you** own AWS: EC2 → Key Pairs (you may need a new key and to attach access via console/SSM). If **someone else** provisioned the box: they must transfer the **existing** `.pem` through a **trusted channel** (password manager, encrypted archive, in person)—**not** plain email/Slack. Then: `chmod 400 /path/to/key.pem`. |
+
+### Android app
+
+The app does **not** embed Twilio or `JWT_SECRET`. It only needs the **public API base URL** (see `app/build.gradle.kts` → `API_BASE_URL`). No extra “secrets file” on the phone for normal login/OTP flows.
+
+### If the user is pairing with a friend who already has production working
+
+- **Twilio:** Friend can keep using their account, or you create your own Twilio project and put **your** SID/token/number in **your** `.env` (and redeploy).  
+- **JWT / DB:** Either copy the **same** production `.env` values from a **secure** handoff (no git), or rotate secrets (new `JWT_SECRET` = everyone re-authenticates; new DB = migrate data separately).  
+- **SSH:** You need **a key that EC2 accepts** (existing `.pem` or AWS-approved replacement process).
+
+---
+
+## Backend: local vs server
+
+### Env file checklist
+
+Official variable list and defaults: **`server/.env.example`**. Summary:
+
+- **`JWT_SECRET`** — long random string (see § Secrets above).
+- **Twilio** — SID, token, `TWILIO_FROM_NUMBER`; or **`TWILIO_MOCK=true`** (OTP only in **`docker compose logs api`**).
+- **Trial Twilio:** verify recipient numbers or use mock mode to avoid **21608**.
+
+Compose wiring: **`server/docker-compose.yml`** (`DATABASE_URL` must reach the compose Postgres service unless you changed topology).
 
 ---
 
@@ -137,6 +186,7 @@ See **`server/scripts/caddy-api-reverse-proxy.snippet`**.
 
 | Symptom | Likely fix |
 |---------|-------------|
+| After `git clone`, API won’t start / no Twilio / “where are my keys?” | **Expected:** secrets are not in git. Follow **§ Secrets and credentials**: `cp server/.env.example server/.env`, fill the table, then run compose or deploy. |
 | `Permission denied (publickey)` | Correct **`-i /path/key.pem`**; `chmod 400 key.pem` |
 | `no configuration file` on EC2 empty dir | Run **deploy script from Mac** to populate `docker-compose.yml` |
 | OTP 21608 Twilio | **Verify** recipient number on trial account |
