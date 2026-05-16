@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import com.carecompanion.app.network.GuardianProfileDto
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -47,11 +48,34 @@ import androidx.compose.ui.unit.sp
 import com.carecompanion.app.ui.theme.CareGreen
 
 data class GuardianProfile(
+    val backendId: String = "",
     val name: String,
+    val linkedElderPhone: String = "",
+    /** Saved with profile for API create; echoes server keys after fetch */
+    val avatarIconKey: String? = null,
+    val avatarBgArgb: Int? = null,
     val icon: ImageVector,
     val bg: Color,
     val photoUri: Uri? = null
 )
+
+fun GuardianProfile.stableKey(): String =
+    backendId.ifBlank { "local:${name.trim().lowercase()}" }
+
+fun GuardianProfileDto.toGuardianProfile(): GuardianProfile {
+    val (iconPick, fbBg) = GuardianAvatars.pairFromKey(avatarIconKey)
+    val bgColor = avatarBgArgb?.takeIf { it != 0 }?.let { Color(it) } ?: fbBg
+    return GuardianProfile(
+        backendId = id,
+        name = displayName,
+        linkedElderPhone = linkedElderPhoneE164.orEmpty(),
+        avatarIconKey = avatarIconKey,
+        avatarBgArgb = avatarBgArgb,
+        icon = iconPick,
+        bg = bgColor,
+        photoUri = null
+    )
+}
 
 @Composable
 fun GuardianHomeScreen(
@@ -67,7 +91,7 @@ fun GuardianHomeScreen(
             selectedProfile = null
         } else {
             val sel = selectedProfile
-            if (sel == null || profiles.none { it.name == sel.name }) {
+            if (sel == null || profiles.none { it.stableKey() == sel.stableKey() }) {
                 selectedProfile = profiles.firstOrNull()
             }
         }
@@ -190,7 +214,7 @@ fun GuardianHomeScreen(
                             profiles.forEach { profile ->
                                 ProfileChoiceCard(
                                     profile = profile,
-                                    selected = selectedProfile?.name == profile.name,
+                                    selected = selectedProfile?.stableKey() == profile.stableKey(),
                                     modifier = Modifier.weight(1f),
                                     onClick = { selectedProfile = profile }
                                 )

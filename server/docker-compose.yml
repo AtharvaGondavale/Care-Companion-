@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: care
+      POSTGRES_PASSWORD: care
+      POSTGRES_DB: care_companion
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://care:care@postgres:5432/care_companion?schema=public
+      PORT: "3000"
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      TWILIO_MOCK: ${TWILIO_MOCK:-false}
+    depends_on:
+      - postgres
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata:

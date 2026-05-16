@@ -30,8 +30,16 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.carecompanion.app.network.AuthVerifyResponse
+import com.carecompanion.app.network.CareApiService
+import com.carecompanion.app.network.CareRole
+import com.carecompanion.app.network.OtpRequestBody
+import com.carecompanion.app.network.OtpVerifyBody
+import com.carecompanion.app.network.normalizeToE164Digits
 import com.carecompanion.app.ui.theme.CareCompanionTheme
 import com.carecompanion.app.ui.theme.CareGreen
+import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 data class UserRole(val label: String, val icon: ImageVector)
 
@@ -51,11 +59,32 @@ private val TextSub     = Color(0xFF888888)
 private val GreenLight  = Color(0xFFEAF5EA)
 
 @Composable
-fun LoginScreen(onLoginClicked: (role: String, phone: String) -> Unit = { _, _ -> }) {
+fun LoginScreen(
+    api: CareApiService,
+    onSuccess: (role: CareRole, response: AuthVerifyResponse) -> Unit,
+) {
     var selectedRole  by remember { mutableStateOf<UserRole?>(null) }
     var phone         by remember { mutableStateOf("") }
     var otp           by remember { mutableStateOf("") }
     var otpRequested  by remember { mutableStateOf(false) }
+    var busy          by remember { mutableStateOf(false) }
+    var errorText     by remember { mutableStateOf<String?>(null) }
+    val scope         = rememberCoroutineScope()
+
+    fun roleForSelection(): CareRole? =
+        when {
+            selectedRole?.label?.contains("Elder", ignoreCase = true) == true -> CareRole.ELDER
+            selectedRole?.label?.contains("Guardian", ignoreCase = true) == true -> CareRole.GUARDIAN
+            else -> null
+        }
+
+    fun phoneDigitsNormalized(): String {
+        val d = phone.filter { it.isDigit() }
+        require(d.length >= 10) { "Enter a valid mobile number" }
+        return normalizeToE164Digits(d)
+    }
+
+    fun showError(t: String) { errorText = t }
 
     Box(
         modifier = Modifier
@@ -69,6 +98,22 @@ fun LoginScreen(onLoginClicked: (role: String, phone: String) -> Unit = { _, _ -
                 .align(Alignment.Center),
             horizontalAlignment = Alignment.Start
         ) {
+
+            errorText?.let { err ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
+                ) {
+                    Text(
+                        err,
+                        modifier = Modifier.padding(12.dp),
+                        color = Color(0xFFB71C1C),
+                        fontSize = 14.sp
+                    )
+                }
+            }
 
             // ── App title ──────────────────────────────────────────
             Text(
@@ -145,8 +190,29 @@ fun LoginScreen(onLoginClicked: (role: String, phone: String) -> Unit = { _, _ -
 
                                 ActionButton(
                                     label = "Login",
-                                    enabled = selectedRole != null && otp.length >= 4,
-                                    onClick = { onLoginClicked(selectedRole?.label ?: "", phone) }
+                                    enabled = !busy && selectedRole != null && otp.length >= 4,
+                                    onClick = {
+                                        scope.launch {
+                                            busy = true
+                                            errorText = null
+                                            try {
+                                                val r = roleForSelection()
+                                                    ?: throw IllegalStateException("Select a role")
+                                                val p = phoneDigitsNormalized()
+                                                val code = otp.trim()
+                                                require(code.length >= 4) { "Enter the code from SMS" }
+                                                val body = OtpVerifyBody(phone = p, code = code)
+                                                val resp = api.verifyOtp(body)
+                                                onSuccess(r, resp)
+                                            } catch (e: HttpException) {
+                                                showError(e.response()?.errorBody()?.string() ?: e.message())
+                                            } catch (e: Exception) {
+                                                showError(e.message ?: "Something went wrong")
+                                            } finally {
+                                                busy = false
+                                            }
+                                        }
+                                    }
                                 )
 
                                 Box(
@@ -159,9 +225,27 @@ fun LoginScreen(onLoginClicked: (role: String, phone: String) -> Unit = { _, _ -
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
                                         modifier = Modifier.clickable(
+                                            enabled = !busy,
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
-                                        ) { otp = "" }
+                                        ) {
+                                            scope.launch {
+                                                busy = true
+                                                errorText = null
+                                                try {
+                                                    val r = roleForSelection()
+                                                    ?: throw IllegalStateException("Select a role")
+                                                val p = phoneDigitsNormalized()
+                                                api.requestOtp(OtpRequestBody(phone = p, role = r.name))
+                                                } catch (e: HttpException) {
+                                                    showError(e.response()?.errorBody()?.string() ?: e.message())
+                                                } catch (e: Exception) {
+                                                    showError(e.message ?: "Could not resend")
+                                                } finally {
+                                                    busy = false
+                                                }
+                                            }
+                                        }
                                     )
                                 }
                             } else {
@@ -174,8 +258,27 @@ fun LoginScreen(onLoginClicked: (role: String, phone: String) -> Unit = { _, _ -
 
                                 ActionButton(
                                     label = "Get OTP",
-                                    enabled = selectedRole != null && phone.length >= 10,
-                                    onClick = { otpRequested = true }
+                                    enabled = !busy && selectedRole != null && phone.length >= 10,
+                                    onClick = {
+                                        scope.launch {
+                                            busy = true
+                                            errorText = null
+                                            try {
+                                                val r = roleForSelection()
+                                                    ?: throw IllegalStateException("Select a role")
+                                                val p = phoneDigitsNormalized()
+                                                api.requestOtp(OtpRequestBody(phone = p, role = r.name))
+                                                otpRequested = true
+                                                otp = ""
+                                            } catch (e: HttpException) {
+                                                showError(e.response()?.errorBody()?.string() ?: e.message())
+                                            } catch (e: Exception) {
+                                                showError(e.message ?: "Could not send OTP")
+                                            } finally {
+                                                busy = false
+                                            }
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -302,5 +405,5 @@ private fun ActionButton(label: String, enabled: Boolean, onClick: () -> Unit) {
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 private fun LoginScreenPreview() {
-    CareCompanionTheme { LoginScreen() }
+    CareCompanionTheme { Text("Install on device/emulator for live login.") }
 }

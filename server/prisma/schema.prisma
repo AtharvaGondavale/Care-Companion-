@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  GUARDIAN
+  ELDER
+}
+
+enum MealTiming {
+  BEFORE
+  AFTER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  phoneE164    String   @unique
+  role         Role
+  createdAt    DateTime @default(now())
+  elderProfiles ElderProfile[]
+}
+
+model OtpChallenge {
+  id          String    @id @default(cuid())
+  phoneE164 String
+  role        Role
+  codeHash    String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  attempts    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([phoneE164])
+}
+
+model ElderProfile {
+  id                   String       @id @default(cuid())
+  guardianUserId       String
+  guardian             User         @relation(fields: [guardianUserId], references: [id], onDelete: Cascade)
+  displayName          String
+  linkedElderPhoneE164 String?
+  avatarIconKey       String?
+  avatarBgArgb        Int?
+  photoUrl             String?
+  contacts             Contact[]
+  medicines            Medicine[]
+
+  @@index([guardianUserId])
+  @@index([linkedElderPhoneE164])
+}
+
+model Contact {
+  id             String       @id @default(cuid())
+  elderProfileId String
+  elderProfile   ElderProfile @relation(fields: [elderProfileId], references: [id], onDelete: Cascade)
+  name           String
+  phoneE164      String
+  photoUrl       String?
+
+  @@index([elderProfileId])
+}
+
+model Medicine {
+  id               String               @id @default(cuid())
+  elderProfileId   String
+  elderProfile     ElderProfile         @relation(fields: [elderProfileId], references: [id], onDelete: Cascade)
+  name             String
+  dosage           String               @default("")
+  form             String               @default("Tablet")
+  isActive         Boolean              @default(true)
+  pillImageUrl     String?
+  packetFrontUrl   String?
+  packetBackUrl    String?
+  schedules        MedicineSchedule[]
+
+  @@index([elderProfileId])
+}
+
+model MedicineSchedule {
+  id          String     @id @default(cuid())
+  medicineId  String
+  medicine    Medicine   @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  mealLabel   String
+  timeLabel   String
+  mealTiming  MealTiming @default(BEFORE)
+  withWater   Boolean    @default(false)
+  enabled     Boolean    @default(true)
+
+  @@index([medicineId])
+}

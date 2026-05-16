@@ -44,6 +44,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.carecompanion.app.network.ElderMedicineRowDto
 import com.carecompanion.app.ui.theme.CareCompanionTheme
 import com.carecompanion.app.ui.theme.CareGreen
 import kotlinx.coroutines.launch
@@ -207,7 +208,7 @@ private data class EntertainmentItem(
     val color: Color
 )
 
-private data class MedicineItem(
+data class MedicineItem(
     val name: String,
     val quantity: Int,
     val timeInstruction: String,
@@ -217,10 +218,40 @@ private data class MedicineItem(
     val photoRes: Int? = null
 )
 
+fun elderMedicinesFromRows(rows: List<ElderMedicineRowDto>): List<MedicineItem> =
+    rows.mapIndexed { ix, row -> elderRowToMedicineItem(row, ix) }
+
+private fun elderRowToMedicineItem(row: ElderMedicineRowDto, ix: Int): MedicineItem {
+    val qty = Regex("""(\d+)""").find(row.dosage)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+    val schedule = row.schedules.firstOrNull()
+    val timeInstr = schedule?.let { s ->
+        val prefix =
+            if (s.mealTiming.uppercase() == "AFTER") "After " else "Before "
+        val label = if (s.mealLabel.isNotBlank()) s.mealLabel else s.timeLabel
+        prefix + label
+    }?.trim().orEmpty().ifBlank { row.form.ifBlank { "Today" } }
+    val withInstr = when {
+        row.schedules.any { it.withWater } -> "With Water"
+        else -> "As prescribed"
+    }
+    val palettes = listOf(Color(0xFFFFF8E1), Color(0xFFE3F2FD), Color(0xFFF3E5F5))
+    val icons = listOf(Icons.Outlined.Medication, Icons.Outlined.LocalPharmacy, Icons.Outlined.Vaccines)
+    return MedicineItem(
+        name = row.name,
+        quantity = qty,
+        timeInstruction = timeInstr,
+        withInstruction = withInstr,
+        icon = icons[ix % icons.size],
+        color = palettes[ix % palettes.size],
+        photoRes = null,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ElderHomeScreen(
     elderName: String = "Sunita",
+    elderMedicines: List<MedicineItem> = emptyList(),
     onSosPressed: () -> Unit = {},
     onLogout: () -> Unit = {},
     elderContacts: List<ManagedContact> = emptyList()
@@ -256,7 +287,7 @@ fun ElderHomeScreen(
             ) { padding ->
                 when (destination) {
                     ElderDestination.Home        -> ElderHomePage(padding, elderName, onSosPressed) { destination = it }
-                    ElderDestination.Medicines   -> MedicinesScreen(padding, onSosPressed) { destination = it }
+                    ElderDestination.Medicines   -> MedicinesScreen(padding, onSosPressed, elderMedicines) { destination = it }
                     ElderDestination.Vitals      -> VitalsScreen(padding, onSosPressed) { destination = it }
                     ElderDestination.Contacts    -> ContactsScreen(padding, onSosPressed, elderContacts) { destination = it }
                     ElderDestination.Entertainment -> EntertainmentScreen(padding, onSosPressed) { destination = it }
@@ -662,39 +693,9 @@ private fun ActionCard(
 fun MedicinesScreen(
     padding: PaddingValues,
     onSosPressed: () -> Unit,
-    onNavigate: (ElderDestination) -> Unit
+    medicines: List<MedicineItem>,
+    onNavigate: (ElderDestination) -> Unit,
 ) {
-    val medicines = remember {
-        listOf(
-            MedicineItem(
-                name = "Buprenorphine/Naloxone Strip",
-                quantity = 1,
-                timeInstruction = "Before Lunch",
-                withInstruction = "With Water",
-                icon = Icons.Outlined.Medication,
-                color = Color(0xFFFFF8E1),
-                photoRes = R.drawable.med_strip_1
-            ),
-            MedicineItem(
-                name = "Lorazepam 3mg",
-                quantity = 1,
-                timeInstruction = "After Lunch",
-                withInstruction = "With Water",
-                icon = Icons.Outlined.LocalPharmacy,
-                color = Color(0xFFE3F2FD),
-                photoRes = R.drawable.med_strip_2
-            ),
-            MedicineItem(
-                name = "Alprazolam ODT",
-                quantity = 2,
-                timeInstruction = "After Dinner",
-                withInstruction = "With Milk",
-                icon = Icons.Outlined.Vaccines,
-                color = Color(0xFFF3E5F5),
-                photoRes = R.drawable.med_strip_3
-            )
-        )
-    }
 
     var step by rememberSaveable { mutableStateOf(0) } // 0=list, 1=details, 2=done
     var index by rememberSaveable { mutableStateOf(0) }
@@ -762,7 +763,14 @@ fun MedicinesScreen(
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF2A2A2A)
                         )
-                        medicines.forEachIndexed { i, med ->
+                        if (medicines.isEmpty()) {
+                            Text(
+                                text = "No medicines from your caregiver yet.",
+                                fontSize = 16.sp,
+                                color = Color(0xFF666666)
+                            )
+                        } else {
+                            medicines.forEachIndexed { i, med ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -798,6 +806,7 @@ fun MedicinesScreen(
                                     color = Color(0xFF666666)
                                 )
                             }
+                            }
                         }
                         Spacer(modifier = Modifier.weight(1f))
                         Button(
@@ -808,6 +817,7 @@ fun MedicinesScreen(
                                 skippedCount = 0
                                 step = 1
                             },
+                            enabled = medicines.isNotEmpty(),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(56.dp),
@@ -820,6 +830,9 @@ fun MedicinesScreen(
                 }
 
                 1 -> {
+                    if (medicines.isEmpty()) {
+                        Text("No medicines to take.", modifier = Modifier.padding(16.dp))
+                    } else {
                     AnimatedContent(
                         targetState = index,
                         transitionSpec = {
@@ -963,6 +976,7 @@ fun MedicinesScreen(
                                 )
                             }
                         }
+                    }
                     }
                 }
 

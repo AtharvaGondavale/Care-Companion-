@@ -1,0 +1,7 @@
+# Paste inside your Caddy site block for api.example.com (adjust domain).
+# API listens on the host at 127.0.0.1:3000 (docker-compose publishes there).
+
+api.suyashhumne.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}

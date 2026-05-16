@@ -60,6 +60,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -79,8 +80,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.carecompanion.app.network.normalizeToE164Digits
 import com.carecompanion.app.ui.theme.CareGreen
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 private val PageBg = Color(0xFFF5F6F4)
 private val CardStroke = Color(0xFFE8EBE9)
@@ -90,19 +93,20 @@ private val AccentLink = CareGreen
 
 private data class AvatarOption(val icon: ImageVector, val bg: Color)
 
-private val avatarOptions = listOf(
-    AvatarOption(Icons.Outlined.Person, Color(0xFFE8F4FD)),
-    AvatarOption(Icons.Outlined.Favorite, Color(0xFFFDF2F8)),
-    AvatarOption(Icons.Outlined.LocalHospital, Color(0xFFE8F5E9)),
-    AvatarOption(Icons.Outlined.Call, Color(0xFFFFF8E1)),
-    AvatarOption(Icons.Outlined.Phone, Color(0xFFE0F7FA)),
-    AvatarOption(Icons.Outlined.Home, Color(0xFFF3E5F5))
+private val avatarOptions: List<AvatarOption>
+    get() = GuardianAvatars.options().map { AvatarOption(it.first, it.second) }
+
+/** Real OTP for elder primary phone (same API as login, role ELDER). Guardian session is unchanged on verify. */
+data class ElderPhoneOtpCallbacks(
+    val requestOtp: suspend (phoneE164Digits: String) -> Result<Unit>,
+    val verifyOtp: suspend (phoneE164Digits: String, code: String) -> Result<Unit>,
 )
 
 @Composable
 fun GuardianAddProfileScreen(
     onBack: () -> Unit,
-    onSaveNext: (GuardianProfile) -> Unit
+    onSaveNext: (GuardianProfile) -> Unit,
+    elderPhoneOtp: ElderPhoneOtpCallbacks? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -115,6 +119,16 @@ fun GuardianAddProfileScreen(
     var photoUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var avatarIndex by remember { mutableIntStateOf(0) }
     var showAvatarDialog by remember { mutableStateOf(false) }
+
+    var elderOtpSent by remember { mutableStateOf(false) }
+    var elderOtpVerified by remember { mutableStateOf(false) }
+    var elderOtpCode by remember { mutableStateOf("") }
+    var elderOtpBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(phone) {
+        elderOtpSent = false
+        elderOtpVerified = false
+        elderOtpCode = ""
+    }
 
     val pickImage = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -197,12 +211,31 @@ fun GuardianAddProfileScreen(
                 ) {
                     Button(
                         onClick = {
-                            val pick = avatarOptions[avatarIndex.coerceIn(0, avatarOptions.lastIndex)]
+                            val rawDigits = phone.filter { it.isDigit() }
+                            val needsOtp = elderPhoneOtp != null && rawDigits.length >= 10
+                            if (needsOtp && !elderOtpVerified) {
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        context.getString(R.string.guardian_elder_phone_must_verify),
+                                    )
+                                }
+                                return@Button
+                            }
+                            val list = avatarOptions
+                            val pick = list[avatarIndex.coerceIn(0, list.lastIndex)]
+                            val linked =
+                                rawDigits.takeIf { it.length >= 10 }
+                                    ?.let { normalizeToE164Digits(it) }
+                                    .orEmpty()
                             onSaveNext(
                                 GuardianProfile(
+                                    backendId = "",
                                     name = name.trim().ifBlank {
                                         context.getString(R.string.guardian_unnamed_profile)
                                     },
+                                    linkedElderPhone = linked,
+                                    avatarIconKey = GuardianAvatars.keyFromIndex(avatarIndex),
+                                    avatarBgArgb = GuardianAvatars.argbFromColor(pick.bg),
                                     icon = pick.icon,
                                     bg = pick.bg,
                                     photoUri = photoUri
@@ -444,8 +477,8 @@ fun GuardianAddProfileScreen(
                         Icon(
                             Icons.Outlined.Call,
                             contentDescription = null,
-                                tint = CareGreen,
-                            modifier = Modifier.size(22.dp)
+                            tint = CareGreen,
+                            modifier = Modifier.size(22.dp),
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -498,20 +531,115 @@ fun GuardianAddProfileScreen(
                         TextButton(
                             onClick = {
                                 scope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        context.getString(R.string.guardian_otp_demo)
+                                    val digits = phone.filter { it.isDigit() }
+                                    if (digits.length < 10) {
+                                        snackbarHostState.showSnackbar(
+                                            context.getString(R.string.guardian_elder_phone_too_short),
+                                        )
+                                        return@launch
+                                    }
+                                    val bridge = elderPhoneOtp
+                                    if (bridge == null) {
+                                        snackbarHostState.showSnackbar(
+                                            context.getString(R.string.guardian_elder_otp_login_required),
+                                        )
+                                        return@launch
+                                    }
+                                    elderOtpBusy = true
+                                    val e164 = normalizeToE164Digits(digits)
+                                    val result = bridge.requestOtp(e164)
+                                    elderOtpBusy = false
+                                    result.fold(
+                                        onSuccess = {
+                                            elderOtpSent = true
+                                            elderOtpCode = ""
+                                            snackbarHostState.showSnackbar(
+                                                context.getString(R.string.guardian_elder_otp_sent),
+                                            )
+                                        },
+                                        onFailure = { e ->
+                                            val msg =
+                                                (e as? HttpException)?.response()?.errorBody()?.string()
+                                                    ?: e.message
+                                                    ?: context.getString(R.string.guardian_elder_otp_failed)
+                                            snackbarHostState.showSnackbar(msg.take(280))
+                                        },
                                     )
                                 }
                             },
-                            modifier = Modifier.heightIn(min = 56.dp)
+                            enabled = !elderOtpBusy,
+                            modifier = Modifier.heightIn(min = 56.dp),
                         ) {
                             Text(
                                 stringResource(R.string.guardian_get_otp),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = AccentLink
+                                color = AccentLink,
                             )
                         }
+                    }
+
+                    if (elderPhoneOtp != null && elderOtpSent && !elderOtpVerified) {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = elderOtpCode,
+                            onValueChange = { v ->
+                                elderOtpCode = v.filter { ch -> ch.isDigit() }.take(8)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.guardian_elder_otp_hint)) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = fieldColors,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val bridge = elderPhoneOtp ?: return@launch
+                                    val digits = phone.filter { it.isDigit() }
+                                    if (elderOtpCode.trim().length < 4) return@launch
+                                    elderOtpBusy = true
+                                    val e164 = normalizeToE164Digits(digits)
+                                    val result = bridge.verifyOtp(e164, elderOtpCode.trim())
+                                    elderOtpBusy = false
+                                    result.fold(
+                                        onSuccess = {
+                                            elderOtpVerified = true
+                                            snackbarHostState.showSnackbar(
+                                                context.getString(R.string.guardian_elder_otp_verified),
+                                            )
+                                        },
+                                        onFailure = { e ->
+                                            val msg =
+                                                (e as? HttpException)?.response()?.errorBody()?.string()
+                                                    ?: e.message
+                                                    ?: context.getString(R.string.guardian_elder_otp_failed)
+                                            snackbarHostState.showSnackbar(msg.take(280))
+                                        },
+                                    )
+                                }
+                            },
+                            enabled = !elderOtpBusy && elderOtpCode.trim().length >= 4,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CareGreen),
+                        ) {
+                            Text(
+                                stringResource(R.string.guardian_verify_otp),
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    } else if (elderPhoneOtp != null && elderOtpVerified) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.guardian_elder_otp_verified),
+                            fontSize = 13.sp,
+                            color = CareGreen,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
 
                     Spacer(Modifier.height(18.dp))

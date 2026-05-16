@@ -16,8 +16,15 @@
     <string name="guardian_contact_info">Contact information</string>
     <string name="guardian_primary_phone_label">Primary phone</string>
     <string name="guardian_primary_phone">Phone number</string>
-    <string name="guardian_otp_demo">Demo: use any code</string>
     <string name="guardian_get_otp">Get OTP</string>
+    <string name="guardian_elder_otp_sent">OTP sent to this number. Enter the code below.</string>
+    <string name="guardian_elder_otp_verified">Phone verified. You can save the profile.</string>
+    <string name="guardian_elder_otp_hint">Elder OTP</string>
+    <string name="guardian_verify_otp">Verify OTP</string>
+    <string name="guardian_elder_phone_must_verify">Verify the elder phone with OTP before saving.</string>
+    <string name="guardian_elder_phone_too_short">Enter at least 10 digits for the elder phone.</string>
+    <string name="guardian_elder_otp_login_required">Log in as guardian first to verify this number.</string>
+    <string name="guardian_elder_otp_failed">Could not send or verify OTP. Try again.</string>
     <string name="guardian_emergency_section">Emergency contacts</string>
     <string name="guardian_field_name">Name</string>
     <string name="guardian_emergency_name">Emergency contact name</string>

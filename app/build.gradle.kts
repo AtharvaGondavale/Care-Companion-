@@ -15,6 +15,8 @@ android {
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        buildConfigField("String", "API_BASE_URL", "\"https://api.suyashhumne.com\"")
     }
 
     buildTypes {
@@ -34,7 +36,10 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 
@@ -44,6 +49,11 @@ android {
 }
 
 dependencies {
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+
     val bom = platform("androidx.compose:compose-bom:2024.05.00")
     implementation(bom)
     androidTestImplementation(bom)
